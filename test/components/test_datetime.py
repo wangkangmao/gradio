@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import cast
 
 import pytest
@@ -210,6 +210,51 @@ class TestGetDatetimeFromStr:
         # The regex allows zero spaces around '-', so "now-5m" works just like "now - 5m"
         result = dt.get_datetime_from_str("now-5m")
         assert within_range(result.timestamp(), now - 5 * 60)
+
+    def test_now_uses_configured_timezone(self):
+        """'now' is computed in the configured timezone, not the host's local timezone (#14035)."""
+        import pytz
+
+        dt = gr.DateTime(type="datetime", timezone="Asia/Tokyo")
+        result = dt.get_datetime_from_str("now")
+        assert result.tzinfo is not None
+        assert cast(pytz.BaseTzInfo, result.tzinfo).zone == "Asia/Tokyo"
+
+    def test_now_minus_delta_uses_configured_timezone(self):
+        """Relative expressions like 'now - 2h' are also computed in the configured timezone."""
+        import pytz
+
+        dt = gr.DateTime(timezone="Pacific/Pago_Pago")
+        result = dt.get_datetime_from_str("now - 2h")
+        assert result.tzinfo is not None
+        assert cast(pytz.BaseTzInfo, result.tzinfo).zone == "Pacific/Pago_Pago"
+
+    def test_preprocess_datetime_type_now_is_timezone_aware(self):
+        """type='datetime' + timezone: explicit and 'now' inputs are both timezone-aware,
+        so they can be subtracted without raising TypeError (#14035)."""
+        component = gr.DateTime(type="datetime", timezone="Asia/Tokyo")
+        explicit = component.preprocess("2025-11-02 12:00:00")
+        relative = component.preprocess("now")
+        assert explicit.tzinfo is not None
+        assert relative.tzinfo is not None
+        delta = relative - explicit  # must not raise TypeError
+        assert isinstance(delta, timedelta)
+
+    def test_preprocess_string_type_now_matches_postprocess_date(self):
+        """type='string' + include_time=False: 'now' and a unix timestamp format to the
+        same calendar date in the configured timezone (#14035)."""
+        import time
+
+        component = gr.DateTime(
+            type="string", timezone="Pacific/Pago_Pago", include_time=False
+        )
+        assert component.preprocess("now") == component.postprocess(time.time())
+
+    def test_now_without_timezone_stays_naive(self):
+        """Without a configured timezone, 'now' keeps the historical naive-datetime behavior."""
+        dt = gr.DateTime(timezone=None)
+        result = dt.get_datetime_from_str("now")
+        assert result.tzinfo is None
 
 
 class TestDateTimeApiInfo:
